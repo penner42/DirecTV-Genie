@@ -28,22 +28,63 @@ definition(
 
 preferences {
     page(name: "mainPage", content: "mainPage")
+    page(name: "createReceivers", content: "createReceivers")
+    page(name: "manageReceiver", content: "manageReceiver")
 }
 
-def mainPage() {
-    state.receivers = state.receivers ?: [:]
-    int receiverRefreshCount = !state.receiverRefreshCount ? 0 : state.receiverRefreshCount as int
-    state.receiverRefreshCount = receiverRefreshCount + 1
-    def refreshInterval = 3
-
-    if (!state.subscribed) {
-        subscribe(location, null, locationHandler, [filterEvents:false])
-        state.subscribed = true
+def manageReceiver(params) {
+	if (params.id) {
+        state.params = params;
+    } else {
+        params = state.params;
     }
 
+	def receiver = state.receivers.find{it.value.mac == params.id.split("/")[0]}
+	def buttons = ["Pause"]
+    def createOrDeleteButtons = [:]
+    buttons.each { 
+		def id = params.id + "/" + it
+        def d = getChildDevice(id)
+        if (d) {
+        	createOrDeleteButtons[it] = [act: "Remove", id: id, name: "TV ${it}"]// ${receiver.value.displayName}"]
+        } else {
+        	createOrDeleteButtons[it] = [act: "Create", id: id, name: "TV ${it}"]// ${receiver.value.displayName}"]        
+        }
+    }
+	log.debug createOrDeleteButtons
+    if (params.act) {
+		if (params.act == "Create") {
+			def d = addChildDevice("penner42", "DirecTV Genie Switch", createOrDeleteButtons[params.button].id, receiver.value.hub, [label: createOrDeleteButtons[params.button].name])
+            d.sendEvent(name: "receiver", value: params.id)
+            d.sendEvent(name: "command", value: params.button)
+            d.sendEvent(name: "channel",value: "")
+            createOrDeleteButtons[params.button].act = "Remove"
+		} else if (params.act == "Remove") {
+        	log.debug("removing")
+			deleteChildDevice(createOrDeleteButtons[params.button].id)        	
+            createOrDeleteButtons[params.button].act = "Create"            
+        }
+    }
+
+	return dynamicPage(name: "manageReceiver", title: "Manage Receiver", install: true) {
+    	section() {
+        	buttons.each {
+            	def title = "${createOrDeleteButtons[it].act} ${it} Button"
+                def act = "${createOrDeleteButtons[it].act}"
+				href(name: "manageReceiver ${params.id}", page: "manageReceiver", title: "${title}", description: "", params:[id: "${params.id}", act: "${act}", button: "${it}"])
+    		}        
+            href(name: "mainPage", page: "mainPage", title: "Back to main", description: "")
+        }
+    }
+}
+
+def createReceivers() {
+	
+	def selectedReceivers = settings.selectedReceivers ?: []
+    
     if (!state.inCreation) {
         state.inCreation = true
-        settings.selectedReceivers.each { r ->
+        selectedReceivers.each { r ->
             def receiver = state.receivers.find{it.value.mac == r.split("/")[0]}
             def d = getChildDevice(r)
             if (!d) {
@@ -58,8 +99,33 @@ def mainPage() {
         }
         state.inCreation = false
     }
+    
+    return dynamicPage(name: "mainPage", title: "Receiver creation complete", nextPage: "mainPage") {
+    	section("Please tap Next to return to main page") {}
+    }
+}
 
-    if ((state.receiverRefreshCount % 5) == 1) {
+def mainPage() {
+    state.receivers = state.receivers ?: [:]
+    int receiverRefreshCount = !state.receiverRefreshCount ? 0 : state.receiverRefreshCount as int
+    state.receiverRefreshCount = receiverRefreshCount + 1
+    def refreshInterval = 3
+
+    if (!state.subscribed) {
+        subscribe(location, null, locationHandler, [filterEvents:false])
+        state.subscribed = true
+    }
+
+	def createdReceivers = [:]
+    settings.selectedReceivers.each { r -> 
+		def receiver = state.receivers.find{it.value.mac == r.split("/")[0]}
+		def d = getChildDevice(r)
+        if (d) {
+        	createdReceivers[r] = receiver.value.displayName
+        }
+	}
+
+	if ((state.receiverRefreshCount % 5) == 1) {
         sendHubCommand(new physicalgraph.device.HubAction("lan discovery urn:schemas-upnp-org:device:MediaRenderer:1", physicalgraph.device.Protocol.LAN))
     } else {
         // if we're not sending bridge discovery, verify bridges instead
@@ -72,9 +138,26 @@ def mainPage() {
     foundReceivers.each {
         options[it.value.mac + "/" + it.value.clientAddr] = it.value.displayName
     }
-    dynamicPage(name: "mainPage", title: "Discovering Receivers", refreshInterval: refreshInterval, install:true, uninstall:true) {
+    
+	def selectedReceivers = settings.selectedReceivers ?: []
+	if (createdReceivers.size() < selectedReceivers.size()) {
+    	return dynamicPage(name: "createReceivers", title: "Create receivers", nextPage: "createReceivers") {
+        	section("Please tap Next to create receiver devices.") { 
+	        	input "selectedReceivers", "enum", required: false, title: "Select Receviers (${options.size()} found)", submitOnChange: true, multiple:true, options: options.sort{it.value}
+			}
+        }
+    }
+
+	dynamicPage(name: "mainPage", title: "Discovering Receivers", refreshInterval: refreshInterval, install:true, uninstall:true) {
         section() {
             input "selectedReceivers", "enum", required: false, title: "Select Receviers (${options.size()} found)", submitOnChange: true, multiple:true, options: options.sort{it.value}
+        }
+    	if (createdReceivers.size() > 0) {
+        	section("Manage receivers") {
+	        	createdReceivers.each { 
+	            	href(name: "manageReceiver ${it.key}", page: "manageReceiver", title: it.value, description: "", params:[id: it.key])
+	            }
+			}                
         }
     }
 }
@@ -169,10 +252,6 @@ def updated() {
 def initialize() {
 }
 
-def test(resp) {
-    log.debug "test"
-}
-
 def getLAN(host, url, callback) {
     sendHubCommand(new physicalgraph.device.HubAction("GET ${url} HTTP/1.1\r\nHOST: ${host}\r\n\r\n",
             physicalgraph.device.Protocol.LAN, "${host}", [callback: callback]))
@@ -184,4 +263,15 @@ private Integer convertHexToInt(hex) {
 
 private String convertHexToIP(hex) {
     [convertHexToInt(hex[0..1]),convertHexToInt(hex[2..3]),convertHexToInt(hex[4..5]),convertHexToInt(hex[6..7])].join(".")
+}
+
+def runCommand(receiver, command) {
+	log.debug("runcommand")
+	command = command.toLowerCase()
+    def d = getChildDevice(receiver)
+    def host = d.currentValue("networkAddress") + ":8080"
+    def url = "/remote/processKey?key=${command}"
+    if (d) { 
+    	getLAN(host, url, "")
+    }
 }
