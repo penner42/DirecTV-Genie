@@ -61,7 +61,6 @@ def push() {
 		case "channel": 
         	parent.setChannel(receiver, channel)
             break
-		case "pause":
 		case "channel_from_url": 
         	try {
 				httpGet("http://www.geekandproud.net/mlbei/channel.php") { 
@@ -79,6 +78,10 @@ def push() {
 		case "pause":
         	log.debug "pause"
 			parent.runCommand(receiver, command)
+            break
+		case "previous":
+        	log.debug "prev"
+			parent.runCommand(receiver, "prev")
             break
 	}
     
