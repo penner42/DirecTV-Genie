@@ -30,8 +30,13 @@ preferences {
     page(name: "mainPage", content: "mainPage")
     page(name: "createReceivers", content: "createReceivers")
     page(name: "manageReceiver", content: "manageReceiver")
+	
+    page(name: "manageChannels", content: "manageChannels")
 	page(name: "addChannel", content: "addChannel") 
     page(name: "createChannel", content: "createChannel")    
+
+    page(name: "manageButtons", content: "manageButtons")
+    page(name: "createButton", content: "createButton")    
 }
 
 def addChannel(params) {
@@ -47,14 +52,68 @@ def addChannel(params) {
     	section() {
         	input(name: "channelName", type: "text", title: "Channel Name")
             input(name: "channelNumber", type: "number", title: "Channel Number")
-            href(name: "manageReceiver", page: "manageReceiver", title: "Create Channel", description: "", params:[receiver_id: "${params.receiver_id}", act: "Create", button: "channel"])
+            href(name: "manageChannels", page: "manageChannels", title: "Create Channel", description: "", params:[receiver_id: "${params.receiver_id}", act: "Create", button: "channel"])
         }
 	}
 }
 
 def manageReceiver(params) {
-	log.debug("manage" + params)
-	
+    if (params.receiver_id) {
+        state.params = params;
+    } else {
+        params = state.params;
+    }
+	params.act = "none"
+	return dynamicPage(name: "manageReceiver", title: "Manage Receiver", install: true) {
+    	section() {
+			href(name: "manageButtons", page: "manageButtons", title: "Manage Buttons", description: "", params:params)
+			href(name: "manageChannels", page: "manageChannels", title: "Manage Channels", description: "", params:params)
+            href(name: "mainPage", page: "mainPage", title: "Back to main", description: "")
+        }
+    }
+}
+
+def manageChannels(params) {
+    if (params.receiver_id) {
+        state.params = params;
+    } else {
+        params = state.params;
+    }
+    
+	def receiver = state.receivers.find{it.value.mac == params.receiver_id.split("/")[0]}
+	def channels = getChildDevices().findAll{it.currentValue("command") == "channel"}
+    
+	if (params.act) {
+		if (params.act == "Create") {
+        log.debug("Create channel")
+			def id = params.receiver_id + "/" + settings.channelNumber
+			def d = addChildDevice("penner42", "DirecTV Genie Switch", id, receiver.value.hub, [label: settings.channelName])
+	        d.sendEvent(name: "receiver", value: params.receiver_id)
+	        d.sendEvent(name: "command", value: "channel")
+	        d.sendEvent(name: "channel",value: settings.channelNumber)
+            channels.add(d)
+            params.act = "none"
+		} else if (params.act == "Remove") {
+ 			deleteChildDevice(params.channel)
+            channels.remove(channels.find{it.deviceNetworkId == params.channel})
+            params.act = "none"
+        }
+    }    
+
+	return dynamicPage(name: "manageChannels", title: "Manage Channels", install: true) {
+    	section("") {
+			href(name: "manageReceiver", page: "manageReceiver", title: "Back to Receiver", description: "", params:params)
+			href(name: "addChannel", page: "addChannel", title: "Add Channel", description: "", params:params)
+        }
+        section("Existing Channels") {
+        	channels.sort{it.displayName}.each {
+				href(name: "manageChannels ${it.deviceNetworkId}", page:"manageChannels", title: "Remove ${it.displayName} [${it.currentValue("channel")}]", description: "", params:[receiver_id: "${params.receiver_id}", act: "Remove", channel: "${it.deviceNetworkId}"])
+			}
+		}
+    }
+}
+
+def manageButtons(params) {
     if (params.receiver_id) {
         state.params = params;
     } else {
@@ -62,50 +121,54 @@ def manageReceiver(params) {
     }
 
 	def receiver = state.receivers.find{it.value.mac == params.receiver_id.split("/")[0]}
-	def buttons = ["Pause"]
-    def createOrDeleteButtons = [:]
+	def buttons = ["Pause", "Previous"]
+    def createButtons = [:]
+    def removeButtons = [:]
     buttons.each { 
 		def id = params.receiver_id + "/" + it
         def d = getChildDevice(id)
         if (d) {
-        	createOrDeleteButtons[it] = [act: "Remove", switch_id: id, switch_name: "TV ${it}"]// ${receiver.value.displayName}"]
+        	removeButtons[it] = [act: "Remove", switch_id: id, switch_name: "${it}"]
         } else {
-        	createOrDeleteButtons[it] = [act: "Create", switch_id: id, switch_name: "TV ${it}"]// ${receiver.value.displayName}"]        
-        }
-    }
-	log.debug createOrDeleteButtons
-    if (params.act) {
-		if (params.act == "Create") {
-        	if (params.button == "channel") {
-            	def switch_id = params.receiver_id + "/" + settings.channelNumber
-				def d = addChildDevice("penner42", "DirecTV Genie Switch", switch_id, receiver.value.hub, [label: settings.channelName])
-	            d.sendEvent(name: "receiver", value: params.receiver_id)
-	            d.sendEvent(name: "command", value: "channel")
-	            d.sendEvent(name: "channel",value: settings.channelNumber)
-	            createOrDeleteButtons[params.button] = [act: "Remove", switch_id: switch_id, switch_name: settings.channelName]
-            } else {
-				def d = addChildDevice("penner42", "DirecTV Genie Switch", createOrDeleteButtons[params.button].switch_id, receiver.value.hub, [label: createOrDeleteButtons[params.button].switch_name])
-	            d.sendEvent(name: "receiver", value: params.receiver_id)
-	            d.sendEvent(name: "command", value: params.button)
-	            d.sendEvent(name: "channel",value: "")
-	            createOrDeleteButtons[params.button].act = "Remove"
-			}
-		} else if (params.act == "Remove") {
-        	log.debug("removing")
-			deleteChildDevice(createOrDeleteButtons[params.button].switch_id)
-            createOrDeleteButtons[params.button].act = "Create"            
+        	createButtons[it] = [act: "Create", switch_id: id, switch_name: "${it}"]
         }
     }
 
-	return dynamicPage(name: "manageReceiver", title: "Manage Receiver", install: true) {
-    	section() {
-        	buttons.each {
-            	def title = "${createOrDeleteButtons[it].act} ${it} Button"
-                def act = "${createOrDeleteButtons[it].act}"
-				href(name: "manageReceiver ${params.receiver_id}", page: "manageReceiver", title: "${title}", description: "", params:[receiver_id: "${params.receiver_id}", act: "${act}", button: "${it}"])
-    		}
-            href(name: "addChannel", page: "addChannel", title: "Add Channel", description: "", params:params)
-            href(name: "mainPage", page: "mainPage", title: "Back to main", description: "")
+    if (params.act) {
+		if (params.act == "Create") {
+			def d = addChildDevice("penner42", "DirecTV Genie Switch", createButtons[params.button].switch_id, receiver.value.hub, [label: createButtons[params.button].switch_name])
+	        d.sendEvent(name: "receiver", value: params.receiver_id)
+	        d.sendEvent(name: "command", value: params.button)
+	        d.sendEvent(name: "channel",value: "")
+            removeButtons[params.button] = [act: "Remove", switch_id: createButtons[params.button].id, switch_name: createButtons[params.button].switch_name]
+            createButtons.remove(params.button)
+			params.act = "none"
+		} else if (params.act == "Remove") {
+			deleteChildDevice(removeButtons[params.button].switch_id)
+            createButtons[params.button] = [act: "Create", switch_id: removeButtons[params.button].id, switch_name: removeButtons[params.button].switch_name]
+            removeButtons.remove(params.button)
+			params.act = "none"            
+        }
+    }
+
+	return dynamicPage(name: "manageButtons", title: "Manage Buttons", install: true) {
+    	section("") {
+			href(name: "manageReceiver", page: "manageReceiver", title: "Back to Receiver", description: "", params:params)        
+        }
+    	section("New Buttons") {
+			createButtons.each {
+            	log.debug(it)
+	        	def title = "${it.value.act} ${it.value.switch_name} Button"
+	        	def act = it.value.act
+				href(name: "manageButtons ${title}", page: "manageButtons", title: "${title}", description: "", params:[receiver_id: "${params.receiver_id}", act: "${act}", button: "${it.value.switch_name}"])
+			}
+		}
+        section("Existing Buttons") {
+        	removeButtons.each {
+	            	def title = "${it.value.act} ${it.value.switch_name} Button"
+	                def act = it.value.act
+					href(name: "manageButtons ${title}", page: "manageButtons", title: "${title}", description: "", params:[receiver_id: "${params.receiver_id}", act: "${act}", button: "${it.value.switch_name}"])
+            }
         }
     }
 }
