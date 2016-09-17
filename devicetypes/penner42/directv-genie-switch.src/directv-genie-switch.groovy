@@ -62,6 +62,21 @@ def push() {
         	parent.setChannel(receiver, channel)
             break
 		case "pause":
+		case "channel_from_url": 
+        	try {
+				httpGet("http://www.geekandproud.net/mlbei/channel.php") { 
+                	resp -> resp.headers.each {
+    	    			log.debug "${it.name} : ${it.value}"
+					}
+				    log.debug "response contentType: ${resp.contentType}"
+				    log.debug "response data: ${resp.data}"
+	            	parent.setChannel(receiver, resp.data)
+				}
+			} catch (e) {
+			    log.error "something went wrong: $e"
+			}
+            break
+		case "pause":
         	log.debug "pause"
 			parent.runCommand(receiver, command)
             break
